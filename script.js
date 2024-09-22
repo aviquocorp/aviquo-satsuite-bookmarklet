@@ -52,6 +52,17 @@ for (var i = 0; i < table.length; i++) {
     b.push(answers[1].textContent);
     c.push(answers[2].textContent);
     d.push(answers[3].textContent);
+
+    /* answer */
+    answer.push(document.getElementsByClassName("correct-answer")
+        [0].children[1].textContent);
+
+    explanation.push(document.getElementsByClassName("rationale")
+        [0].children[1].textContent);
+
+
+    // we got all the info, close the modal
+    document.getElementsByClassName("cb-btn cb-btn-square cb-btn-close")[0].click();
 } 
 
 
