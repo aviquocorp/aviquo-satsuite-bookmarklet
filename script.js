@@ -4,7 +4,12 @@ var test = [];
 var domain = [];
 var skill = [];
 var difficulty = [];
-var question = [];
+var questionParagraph = [];
+var questionStatement = [];
+var a = [];
+var b = [];
+var c = [];
+var d = [];
 var answer = [];
 var explanation = [];
 
@@ -27,6 +32,26 @@ for (var i = 0; i < table.length; i++) {
     domain.push(questionBanner[2].children[1].textContent);
     skill.push(questionBanner[3].children[1].textContent);
     
+    // difficulty
+    difficulty.push(
+        document.getElementsByClassName("question-difficulty")[0]
+        .children[1].textContent);
+
+    /* question */
+    questionParagraph.push(
+        document.getElementsByClassName("prompt cb-margin-top-32")[0].textContent);
+
+    questionStatement.push(
+        document.getElementsByClassName("question cb-margin-top-16")[0].textContent);
+
+    /* A B C D */
+    const answers = document.getElementsByClassName("answer-choices cb-margin-top-16")
+            [0].children[0].children;
+
+    a.push(answers[0].textContent);
+    b.push(answers[1].textContent);
+    c.push(answers[2].textContent);
+    d.push(answers[3].textContent);
 } 
 
 
