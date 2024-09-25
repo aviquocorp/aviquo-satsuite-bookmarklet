@@ -4,9 +4,10 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 
-
+import time
 import json
 from typing import Final
+import sqlite3
 
 SAT: Final = "99"
 PSAT11_10: Final = "100"
@@ -36,7 +37,11 @@ class Main:
 
         self.driver = webdriver.Firefox(options=self.options)
         self.questions = []
+        self.headers = ""
         self.waiter = WebDriverWait(self.driver, 10)
+        self.currentTest = ""
+        self.currentCategory = ""
+        self.database = Database()
 
     def goToQuestionBankSite(self):
         """
@@ -50,8 +55,10 @@ class Main:
     def getToQuestionsPage(self, test: str):
         assessmentButton = Select(self.driver.find_element(By.ID, "selectAssessmentType"))
         assessmentButton.select_by_value(test)
+        self.currentTest = test
         testButton = Select(self.driver.find_element(By.ID, "selectTestType"))
         testButton.select_by_value('1')
+        self.currentCategory = "Reading and Writing"
 
         checkboxes = self.driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
         for checkbox in checkboxes[:4]:
@@ -64,31 +71,98 @@ class Main:
         self.waiter.until(EC.presence_of_element_located((By.CLASS_NAME, "view-question-button")))
 
         response = json.loads(request.response.body)
-        with open('data.txt', 'w') as f:
+        self.headers = request.headers.as_string()
+        del self.driver.requests
+
+        for question in response:
+            external_id = question['external_id']
+            print(f"Getting {external_id}")
+            self._getQuestionData(question)
+            time.sleep(2)
+
+
+
+    def _getQuestionData(self, questionResponse: dict):
+        script = f"""
+            let xhr = new XMLHttpRequest();
+            xhr.open('POST', 'https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-question', false);
+            xhr.send('{{"external_id": "{questionResponse['external_id']}"}}');
+        """
+        print(script)
+        self.driver.execute_script(script)
+
+        request = self.driver.wait_for_request("get-question", 10)
+        response = json.loads(request.response.body)
+        question = Question(questionResponse['external_id'], questionResponse['questionId'], self.currentCategory, questionResponse['primary_class_cd_desc'], questionResponse['skill_desc'], Main.convertDifficulty(questionResponse['difficulty']), response['stimulus'], response['stem'], response['answerOptions'], response['correct_answer'][0], response['rationale'])
+
+        self.questions.append(question)
+        self.database.insert(question)
+
+        with open('questions.txt', 'a') as f:
             json.dump(response, f)
+            f.write(',\n')
 
-        exit(0)
+        del self.driver.requests
 
-    def getReadingTestQuestions(self):
-        checkboxes = self.driver.find_elements(By.TAG_NAME, "input")
-        for checkbox in checkboxes:
-            checkbox.click()
-
+    def convertDifficulty(difficulty: str):
+        if difficulty == "H":
+            return "Hard"
+        elif difficulty == "M":
+            return "Medium"
+        elif difficulty == "E":
+            return "Easy"
 
 
 class Question:
-    def __init(self, externalId: str, id: str, category: str, domain: str, skill: str, difficulty: str, active: bool, question: str, answerChoices: str, answer: str, rationale: str):
-        self.externalId = externalId
+    def __init__(self, external_id: str, id: str, category: str, domain: str, skill: str, difficulty: str, details: str, question: str, answer_choices: dict, answer: str, rationale: str):
+        self.external_id = external_id
         self.id = id
         self.category = category
         self.domain = domain
         self.skill = skill
         self.difficulty = difficulty
-        self.active = active
+        self.details = details
         self.question = question
-        self.answerChoices = answerChoices
+        self.answer_choices = answer_choices
         self.answer = answer
         self.rationale = rationale
+
+class Database:
+    def __init__(self):
+        self.connection = sqlite3.connect('questions.db')
+        self.cursor = self.connection.cursor()
+
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS questions (
+                id TEXT,
+                category TEXT,
+                domain TEXT,
+                skill TEXT,
+                difficulty TEXT,
+                details TEXT,
+                question TEXT,
+                answer_choices TEXT,
+                answer TEXT,
+                rationale TEXT
+            )
+        """)
+
+    def insert(self, question: Question):
+        self.cursor.execute("""
+            INSERT INTO questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (
+            question.id,
+            question.category,
+            question.domain,
+            question.skill,
+            question.difficulty,
+            question.details,
+            question.question,
+            json.dumps(question.answer_choices),
+            question.answer,
+            question.rationale
+        ))
+        self.connection.commit()
 
 if __name__ == "__main__":
     runner = Main()

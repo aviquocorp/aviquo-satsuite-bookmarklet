@@ -130,5 +130,8 @@ dist
 .pnp.*
 
 # and any crap files
-data.txt
-screenshot.png
+*.txt
+*.png
+*.json
+*.jsonc
+*.db
