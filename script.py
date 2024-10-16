@@ -103,7 +103,7 @@ class Main:
         # when the table is loaded, the request already has a response
         self.waiter.until(EC.presence_of_element_located((By.CLASS_NAME, "view-question-button")))
 
-        response = json.loads(request.response.body.encode('utf-8'))
+        response = json.loads(request.response.body.decode('utf-8'))
         self.headers = request.headers.as_string()
         del self.driver.requests
 
