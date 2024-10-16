@@ -8,15 +8,24 @@ import time
 import json
 from typing import Final
 import sqlite3
+import sys
 
 SAT: Final = "99"
 PSAT11_10: Final = "100"
 PSAT8_9: Final = "102"
+debug = True
+headless = False
 
 class Main:
     def __init__(self):
+        """
+        Sets up options for the Firefox driver
+        Opens the Firefox driver
+        Initializes the database object
+        """
         self.options = webdriver.FirefoxOptions()
-        #self.options.add_argument("--headless")
+        if headless:
+            self.options.add_argument("--headless")
         self.options.add_argument("--disable-dev-shm-usage")
         self.options.add_argument("--disable-gpu")
         self.options.add_argument("--disable-extensions")
@@ -52,13 +61,36 @@ class Main:
         button.click()
         self.waiter.until(EC.presence_of_element_located((By.ID, "selectAssessmentType")))
 
-    def getToQuestionsPage(self, test: str):
+    def getQuestionsForTest(self, test: str):
+        """
+        Selects the given assessment type from the dropdown and then calls
+        getQuestionsForCategory for both reading and writing and math.
+
+        Args:
+            test (str): The assessment type to select.
+
+        Returns:
+            None
+        """
         assessmentButton = Select(self.driver.find_element(By.ID, "selectAssessmentType"))
         assessmentButton.select_by_value(test)
         self.currentTest = test
+        self.getQuestionsForCategory('2')
+        self.getQuestionsForCategory('1')
+
+    def getQuestionsForCategory(self, category: str):
+        """
+        Retrieves and processes questions for the specified category.
+
+        Args:
+            category (str): The category of questions to retrieve.
+
+        Returns:
+            None
+        """
         testButton = Select(self.driver.find_element(By.ID, "selectTestType"))
-        testButton.select_by_value('1')
-        self.currentCategory = "Reading and Writing"
+        testButton.select_by_value(category)
+        self.currentCategory = "Reading and Writing" if category == '1' else "Math"
 
         checkboxes = self.driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
         for checkbox in checkboxes[:4]:
@@ -76,19 +108,32 @@ class Main:
 
         for question in response:
             external_id = question['external_id']
-            print(f"Getting {external_id}")
+            if debug:
+                print(f"Getting {external_id} ({question['questionId']}) from {self.currentTest} {category}")
             self._getQuestionData(question)
             time.sleep(2)
 
+        # must go back to main page before scraping next category/test
+        self.goToQuestionBankSite()
 
 
     def _getQuestionData(self, questionResponse: dict):
+        """
+        Gets the data for a single question and inserts it into the database.
+
+        Args:
+            questionResponse (dict): The response from the get-questions request.
+
+        Returns:
+            None
+        """
         script = f"""
             let xhr = new XMLHttpRequest();
             xhr.open('POST', 'https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-question', false);
             xhr.send('{{"external_id": "{questionResponse['external_id']}"}}');
         """
-        print(script)
+        if debug:
+            print(script)
         self.driver.execute_script(script)
 
         request = self.driver.wait_for_request("get-question", 10)
@@ -115,6 +160,22 @@ class Main:
 
 class Question:
     def __init__(self, external_id: str, id: str, category: str, domain: str, skill: str, difficulty: str, details: str, question: str, answer_choices: dict, answer: str, rationale: str):
+        """
+        Initializes a new Question object.
+
+        Args:
+            external_id (str): The external id of the question.
+            id (str): The id of the question.
+            category (str): The category of the question.
+            domain (str): The domain of the question.
+            skill (str): The skill of the question.
+            difficulty (str): The difficulty of the question.
+            details (str): The extra details given with the question.
+            question (str): The text of the question.
+            answer_choices (dict): The answer choices.
+            answer (str): The correct answer.
+            rationale (str): The explanation for the answer.
+        """
         self.external_id = external_id
         self.id = id
         self.category = category
@@ -129,13 +190,30 @@ class Question:
 
 class Database:
     def __init__(self):
+        """
+        Initializes a new Database object.
+
+        This will create a new SQLite database file if it doesn't exist, and
+        connect to it. The database will have a single table, `sat_questions`,
+        with the following columns:
+        - `id`: A unique identifier for the question.
+        - `category`: The category of the question (reading, writing, math).
+        - `domain`: The domain of the question.
+        - `skill`: The skill of the question.
+        - `difficulty`: The difficulty of the question.
+        - `details`: The extra details given with the question.
+        - `question`: The text of the question.
+        - `answer_choices`: The answer choices.
+        - `answer`: The correct answer.
+        - `rationale`: The explanation for the answer.
+        """
         self.connection = sqlite3.connect('questions.db')
         self.cursor = self.connection.cursor()
 
         self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS questions (
-                id TEXT,
-                category TEXT,
+            CREATE TABLE IF NOT EXISTS sat_questions (
+                id TEXT PRIMARY KEY NOT NULL UNIQUE,
+                category TEXT NOT NULL,
                 domain TEXT,
                 skill TEXT,
                 difficulty TEXT,
@@ -144,10 +222,16 @@ class Database:
                 answer_choices TEXT,
                 answer TEXT,
                 rationale TEXT
-            )
+            );
         """)
 
     def insert(self, question: Question):
+        """
+        Inserts a single question into the database.
+
+        Args:
+            question (Question): The question to insert.
+        """
         self.cursor.execute("""
             INSERT INTO questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
@@ -165,9 +249,20 @@ class Database:
         self.connection.commit()
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        for arg in range(1, len(sys.argv)):
+            if sys.argv[arg] == "--debug" or sys.argv[arg] == "-d":
+                debug = True
+            elif sys.argv[arg] == "--headless" or sys.argv[arg] == "-H":
+                headless = True
+            elif sys.argv[arg] == "--help" or sys.argv[arg] == "-h":
+                print("Usage: python script.py [--debug | -d] [--headless | -H]")
+                sys.exit(0)
+
     runner = Main()
     elem = runner.goToQuestionBankSite()
 
     for test in (SAT, PSAT11_10, PSAT8_9):
-        runner.getToQuestionsPage(test)
-    input()
+        runner.getQuestionsForTest(test)
+
+    print("Done!")
