@@ -1,8 +1,17 @@
 # aviquo-satsuite-bookmarklet
-A bookmarklet to scrape all the questions on SAT suite
 
-Use [this link](https://mrcoles.com/bookmarklet/) to turn it into a bookmarklet
+A python script that collects all of the questions from the SAT question bank into an SQLite database.
+> (ignore the bookmarklet part that was old)
 
-In the javascript console, this will output a csv in the following format:
+## Usage
 
-`ID,Assessment,Test,Domain,Skill,Difficulty,Question,Answer,Explanation`
+```bash
+git clone https://github.com/aviquocorp/aviquo-satsuite-bookmarklet.git && cd aviquo-satsuite-bookmarklet
+pip install -r requirements.txt
+
+# Windows
+py script.py -h
+
+# MacOS and Linux
+python3 script.py -h
+```

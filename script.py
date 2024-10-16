@@ -9,6 +9,7 @@ import json
 from typing import Final
 import sqlite3
 import sys
+import re
 
 SAT: Final = "99"
 PSAT11_10: Final = "100"
@@ -127,6 +128,10 @@ class Main:
         Returns:
             None
         """
+        if 'external_id' not in questionResponse:
+            self._getQuestionDataMath(questionResponse)
+            return
+
         script = f"""
             let xhr = new XMLHttpRequest();
             xhr.open('POST', 'https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital/get-question', false);
@@ -138,7 +143,65 @@ class Main:
 
         request = self.driver.wait_for_request("get-question", 10)
         response = json.loads(request.response.body)
-        question = Question(questionResponse['external_id'], questionResponse['questionId'], self.currentCategory, questionResponse['primary_class_cd_desc'], questionResponse['skill_desc'], Main.convertDifficulty(questionResponse['difficulty']), response['stimulus'], response['stem'], response['answerOptions'], response['correct_answer'][0], response['rationale'])
+        question = Question(
+            questionResponse['external_id'],
+            questionResponse['questionId'],
+            self.currentCategory,
+            questionResponse['primary_class_cd_desc'],
+            questionResponse['skill_desc'],
+            Main.convertDifficulty(questionResponse['difficulty']),
+            response['stimulus'] if 'stimulus' in response else "",
+            response['stem'],
+            response['answerOptions'],
+            response['correct_answer'][0],
+            response['rationale']
+        )
+
+        self.questions.append(question)
+        self.database.insert(question)
+
+        with open('questions.txt', 'a') as f:
+            json.dump(response, f)
+            f.write(',\n')
+
+        del self.driver.requests
+
+    def _getQuestionDataMath(self, questionResponse: dict):
+        script = f"""
+            let xhr = new XMLHttpRequest();
+            xhr.open('GET', 'https://saic.collegeboard.org/disclosed/{questionResponse['ibn']}.json', false);
+            xhr.send();
+        """
+        if debug:
+            print(script)
+        self.driver.execute_script(script)
+
+        request = self.driver.wait_for_request(f"{questionResponse['ibn']}.json")
+        response = json.loads(request.response.body)
+
+        answer = ""
+        answer_choices = ""
+        if response['answer']['style'] == "Multiple Choice":
+            answer = response['answer']['correct_choice']
+            answer_choices = response['answer']['choices']
+        else:
+            ans = re.search(r"([1-9]*)\.", response['answer']['rationale'])
+            if ans:
+                answer = ans[0]
+
+        question = Question(
+            questionResponse['external_id'],
+            questionResponse['questionId'],
+            self.currentCategory,
+            questionResponse['primary_class_cd_desc'],
+            questionResponse['skill_desc'],
+            Main.convertDifficulty(questionResponse['difficulty']),
+            response['body'] if 'body' in response else "",
+            response['prompt'],
+            answer_choices,
+            answer,
+            response['answer']['rationale']
+        )
 
         self.questions.append(question)
         self.database.insert(question)
@@ -159,7 +222,19 @@ class Main:
 
 
 class Question:
-    def __init__(self, external_id: str, id: str, category: str, domain: str, skill: str, difficulty: str, details: str, question: str, answer_choices: dict, answer: str, rationale: str):
+    def __init__(self,
+        external_id: str,
+        id: str,
+        category: str,
+        domain: str,
+        skill: str,
+        difficulty: str,
+        details: str,
+        question: str,
+        answer_choices: dict,
+        answer: str,
+        rationale: str
+    ):
         """
         Initializes a new Question object.
 
@@ -214,14 +289,14 @@ class Database:
             CREATE TABLE IF NOT EXISTS sat_questions (
                 id TEXT PRIMARY KEY NOT NULL UNIQUE,
                 category TEXT NOT NULL,
-                domain TEXT,
-                skill TEXT,
-                difficulty TEXT,
+                domain TEXT NOT NULL,
+                skill TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
                 details TEXT,
-                question TEXT,
+                question TEXT NOT NULL,
                 answer_choices TEXT,
-                answer TEXT,
-                rationale TEXT
+                answer TEXT NOT NULL,
+                rationale TEXT NOT NULL
             );
         """)
 
