@@ -13,7 +13,7 @@ import sys
 SAT: Final = "99"
 PSAT11_10: Final = "100"
 PSAT8_9: Final = "102"
-debug = True
+debug = False
 headless = False
 
 class Main:
