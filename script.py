@@ -128,7 +128,7 @@ class Main:
         Returns:
             None
         """
-        if 'external_id' not in questionResponse:
+        if 'external_id' not in questionResponse or questionResponse['external_id'] is None:
             self._getQuestionDataMath(questionResponse)
             return
 
