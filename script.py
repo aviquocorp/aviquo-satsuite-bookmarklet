@@ -103,14 +103,14 @@ class Main:
         # when the table is loaded, the request already has a response
         self.waiter.until(EC.presence_of_element_located((By.CLASS_NAME, "view-question-button")))
 
-        response = json.loads(request.response.body)
+        response = json.loads(request.response.body.encode('utf-8'))
         self.headers = request.headers.as_string()
         del self.driver.requests
 
         for question in response:
             external_id = question['external_id']
             if debug:
-                print(f"Getting {external_id} ({question['questionId']}) from {self.currentTest} {category}")
+                print(f"Getting {external_id if external_id else question['ibn']} ({question['questionId']}) from {self.currentTest} {category}")
             self._getQuestionData(question)
             time.sleep(2)
 
@@ -307,7 +307,7 @@ class Database:
         Args:
             question (Question): The question to insert.
         """
-        try: 
+        try:
             self.cursor.execute("""
                 INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, (
