@@ -307,21 +307,24 @@ class Database:
         Args:
             question (Question): The question to insert.
         """
-        self.cursor.execute("""
-            INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, (
-            question.id,
-            question.category,
-            question.domain,
-            question.skill,
-            question.difficulty,
-            question.details,
-            question.question,
-            json.dumps(question.answer_choices),
-            question.answer,
-            question.rationale
-        ))
-        self.connection.commit()
+        try: 
+            self.cursor.execute("""
+                INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                question.id,
+                question.category,
+                question.domain,
+                question.skill,
+                question.difficulty,
+                question.details,
+                question.question,
+                json.dumps(question.answer_choices),
+                question.answer,
+                question.rationale
+            ))
+            self.connection.commit()
+        except sqlite3.IntegrityError:
+            print(f"{question.id} already in table.")
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
