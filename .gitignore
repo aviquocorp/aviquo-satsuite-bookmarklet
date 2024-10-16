@@ -131,6 +131,7 @@ dist
 
 # and any crap files
 *.txt
+!requirements.txt
 *.png
 *.json
 *.jsonc
