@@ -136,3 +136,5 @@ dist
 *.json
 *.jsonc
 *.db
+
+venv
