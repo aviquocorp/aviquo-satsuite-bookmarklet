@@ -308,7 +308,7 @@ class Database:
             question (Question): The question to insert.
         """
         self.cursor.execute("""
-            INSERT INTO questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             question.id,
             question.category,
