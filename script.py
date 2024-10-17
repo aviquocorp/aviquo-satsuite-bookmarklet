@@ -4,6 +4,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.select import Select
 
+import gzip
 import time
 import json
 from typing import Final
@@ -131,6 +132,11 @@ class Main:
         if 'external_id' not in questionResponse or questionResponse['external_id'] is None:
             self._getQuestionDataMath(questionResponse)
             return
+        
+        if self.database.isDuplicate(questionResponse['external_id']):
+            if debug:
+                print(f"{questionResponse['external_id']} is already in table")
+            return
 
         script = f"""
             let xhr = new XMLHttpRequest();
@@ -167,6 +173,11 @@ class Main:
         del self.driver.requests
 
     def _getQuestionDataMath(self, questionResponse: dict):
+        if self.database.isDuplicate(questionResponse['ibn']):
+            if debug:
+                print(f"{questionResponse['ibn']} is already ")
+            return
+
         script = f"""
             let xhr = new XMLHttpRequest();
             xhr.open('GET', 'https://saic.collegeboard.org/disclosed/{questionResponse['ibn']}.json', false);
@@ -177,10 +188,12 @@ class Main:
         self.driver.execute_script(script)
 
         request = self.driver.wait_for_request(f"{questionResponse['ibn']}.json")
-        response = json.loads(request.response.body)
+        data = gzip.decompress(request.response.body)
+        response = json.loads(data.decode('utf-8'))[0]
 
         answer = ""
         answer_choices = ""
+        print(response)
         if response['answer']['style'] == "Multiple Choice":
             answer = response['answer']['correct_choice']
             answer_choices = response['answer']['choices']
@@ -190,7 +203,7 @@ class Main:
                 answer = ans[0]
 
         question = Question(
-            questionResponse['external_id'],
+            questionResponse['ibn'],
             questionResponse['questionId'],
             self.currentCategory,
             questionResponse['primary_class_cd_desc'],
@@ -224,7 +237,7 @@ class Main:
 class Question:
     def __init__(self,
         external_id: str,
-        id: str,
+        question_id: str,
         category: str,
         domain: str,
         skill: str,
@@ -251,8 +264,8 @@ class Question:
             answer (str): The correct answer.
             rationale (str): The explanation for the answer.
         """
-        self.external_id = external_id
-        self.id = id
+        self.id = external_id
+        self.question_id = question_id
         self.category = category
         self.domain = domain
         self.skill = skill
@@ -288,6 +301,7 @@ class Database:
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS sat_questions (
                 id TEXT PRIMARY KEY NOT NULL UNIQUE,
+                questionId TEXT NOT NULL UNIQUE,
                 category TEXT NOT NULL,
                 domain TEXT NOT NULL,
                 skill TEXT NOT NULL,
@@ -309,9 +323,10 @@ class Database:
         """
         try:
             self.cursor.execute("""
-                INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, (
                 question.id,
+                question.question_id,
                 question.category,
                 question.domain,
                 question.skill,
@@ -325,6 +340,13 @@ class Database:
             self.connection.commit()
         except sqlite3.IntegrityError:
             print(f"{question.id} already in table.")
+    
+    def isDuplicate(self, id: str):
+        print(id)
+        res = self.cursor.execute("""
+            SELECT COUNT(*) FROM sat_questions WHERE id = ?;
+        """, (id))
+        return len(res.fetchone()) > 1
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
