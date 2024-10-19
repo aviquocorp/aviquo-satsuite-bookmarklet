@@ -119,7 +119,7 @@ class Main:
                 print(f"Getting {external_id if external_id else question['ibn']} ({question['questionId']}) from {self.currentTest} {category}")
 
             # if the question is already in the database, skip it
-            isDupe = await databaseIsDuplicate(external_id if external_id else question['ibn'], self.testToString(self.currentTest))
+            isDupe = await databaseIsDuplicate(question['questionId'])
             if isDupe:
                 if debug:
                     print(f"{external_id if external_id else question['ibn']} is already in table")
@@ -158,8 +158,8 @@ class Main:
         request = self.driver.wait_for_request("get-question", 10)
         response = json.loads(request.response.body)
         question = Question(
-            questionResponse['external_id'],
             questionResponse['questionId'],
+            questionResponse['external_id'],
             self.testToString(self.currentTest),
             self.currentCategory,
             questionResponse['primary_class_cd_desc'],
@@ -210,8 +210,8 @@ class Main:
                 answer = ans[0]
 
         question = Question(
-            questionResponse['ibn'],
             questionResponse['questionId'],
+            questionResponse['ibn'],
             self.testToString(self.currentTest),
             self.currentCategory,
             questionResponse['primary_class_cd_desc'],
@@ -244,15 +244,15 @@ class Main:
         if test == "99":
             return "SAT"
         elif test == "100":
-            return "PSAT11_10"
+            return "PSAT 10/11"
         elif test == "102":
-            return "PSAT8_9"
+            return "PSAT 8/9"
 
 
 class Question:
     def __init__(self,
-        external_id: str,
         question_id: str,
+        external_id: str,
         test: str,
         category: str,
         domain: str,
@@ -268,8 +268,8 @@ class Question:
         Initializes a new Question object.
 
         Args:
-            external_id (str): The external id of the question.
             id (str): The id of the question.
+            external_id (str): The external id or ibn number of the question.
             test (str): The test the question belongs to.
             category (str): The category of the question.
             domain (str): The domain of the question.
@@ -281,8 +281,8 @@ class Question:
             answer (str): The correct answer.
             rationale (str): The explanation for the answer.
         """
-        self.id = external_id
         self.question_id = question_id
+        self.id = external_id
         self.test = test
         self.category = category
         self.domain = domain
@@ -302,7 +302,9 @@ async def connectToDatabase():
     This creates a connection to the SQLite database file `questions.db` and
     creates a table `sat_questions` if it doesn't exist. The table has the
     following columns:
-    - `id`: A unique identifier for the question.
+    - `questionId`: A unique identifier for the question.
+    - `id`: The external id or ibn number of the question.
+    - `test`: The test the question belongs to.
     - `category`: The category of the question (reading, writing, math).
     - `domain`: The domain of the question.
     - `skill`: The skill of the question.
@@ -322,8 +324,8 @@ async def connectToDatabase():
 
     await cursor.executescript("""
         CREATE TABLE IF NOT EXISTS sat_questions (
-            id TEXT PRIMARY KEY NOT NULL UNIQUE,
-            questionId TEXT NOT NULL UNIQUE,
+            questionId TEXT PRIMARY KEY NOT NULL UNIQUE,
+            id TEXT NOT NULL,
             test TEXT NOT NULL,
             category TEXT NOT NULL,
             domain TEXT NOT NULL,
@@ -336,7 +338,7 @@ async def connectToDatabase():
             rationale TEXT NOT NULL
         );
 
-        CREATE UNIQUE INDEX IF NOT EXISTS dupeCheckIndex ON sat_questions (id, test);
+        CREATE UNIQUE INDEX IF NOT EXISTS dupeCheckIndex ON sat_questions (questionId);
     """)
 
 async def databaseInsert(question: Question):
@@ -350,8 +352,8 @@ async def databaseInsert(question: Question):
         await cursor.execute("""
             INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
-            question.id,
             question.question_id,
+            question.id,
             question.test,
             question.category,
             question.domain,
@@ -367,10 +369,10 @@ async def databaseInsert(question: Question):
     except Exception as e:
         print(e)
 
-async def databaseIsDuplicate(id: str, test: str):
+async def databaseIsDuplicate(questionId: str):
     res = await cursor.execute("""
-        SELECT COUNT(*) FROM sat_questions WHERE id = ? AND test = ?;
-    """, (id, test))
+        SELECT COUNT(*) FROM sat_questions WHERE questionId = ?;
+    """, (questionId,))
 
     count = await res.fetchone()
     return count[0] > 0
@@ -380,6 +382,7 @@ async def main():
     runner.goToQuestionBankSite()
     for test in (SAT, PSAT11_10, PSAT8_9):
         await runner.getQuestionsForTest(test)
+    await connection.close()
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:

@@ -138,5 +138,6 @@ dist
 *.db
 *.db-shm
 *.db-wal
+output
 
 venv
