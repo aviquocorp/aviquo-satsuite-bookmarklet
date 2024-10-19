@@ -8,9 +8,10 @@ import gzip
 import time
 import json
 from typing import Final
-import sqlite3
+import asqlite
 import sys
 import re
+import asyncio
 
 SAT: Final = "99"
 PSAT11_10: Final = "100"
@@ -47,23 +48,23 @@ class Main:
         self.options.set_preference("browser.privatebrowsing.autostart", 1)
 
         self.driver = webdriver.Firefox(options=self.options)
-        self.questions = []
         self.headers = ""
         self.waiter = WebDriverWait(self.driver, 10)
         self.currentTest = ""
         self.currentCategory = ""
-        self.database = Database()
+        self.newQuestions = 0
 
     def goToQuestionBankSite(self):
         """
         Navigates to the SAT Question Bank website, clicks on the "Find Questions" button, and waits for the assessment type dropdown to appear.
         """
         self.driver.get("https://satsuitequestionbank.collegeboard.org/")
+        self.waiter.until(EC.presence_of_element_located((By.CLASS_NAME, "cb-btn")))
         button = self.driver.find_element(By.CLASS_NAME, "cb-btn")
         button.click()
         self.waiter.until(EC.presence_of_element_located((By.ID, "selectAssessmentType")))
 
-    def getQuestionsForTest(self, test: str):
+    async def getQuestionsForTest(self, test: str):
         """
         Selects the given assessment type from the dropdown and then calls
         getQuestionsForCategory for both reading and writing and math.
@@ -74,13 +75,16 @@ class Main:
         Returns:
             None
         """
-        assessmentButton = Select(self.driver.find_element(By.ID, "selectAssessmentType"))
-        assessmentButton.select_by_value(test)
-        self.currentTest = test
-        self.getQuestionsForCategory('2')
-        self.getQuestionsForCategory('1')
+        self.newQuestions = 0
+        for category in ('1', '2'):
+            assessmentButton = Select(self.driver.find_element(By.ID, "selectAssessmentType"))
+            assessmentButton.select_by_value(test)
+            self.currentTest = test
+            await self.getQuestionsForCategory(category)
 
-    def getQuestionsForCategory(self, category: str):
+        print(f"Got {self.newQuestions} new questions for {self.currentTest}")
+
+    async def getQuestionsForCategory(self, category: str):
         """
         Retrieves and processes questions for the specified category.
 
@@ -90,6 +94,7 @@ class Main:
         Returns:
             None
         """
+        self.waiter.until(EC.presence_of_element_located((By.ID, "selectTestType")))
         testButton = Select(self.driver.find_element(By.ID, "selectTestType"))
         testButton.select_by_value(category)
         self.currentCategory = "Reading and Writing" if category == '1' else "Math"
@@ -112,14 +117,22 @@ class Main:
             external_id = question['external_id']
             if debug:
                 print(f"Getting {external_id if external_id else question['ibn']} ({question['questionId']}) from {self.currentTest} {category}")
-            self._getQuestionData(question)
-            time.sleep(2)
+
+            # if the question is already in the database, skip it
+            isDupe = await databaseIsDuplicate(external_id if external_id else question['ibn'], self.testToString(self.currentTest))
+            if isDupe:
+                if debug:
+                    print(f"{external_id if external_id else question['ibn']} is already in table")
+                continue
+            await self._getQuestionData(question)
+            self.newQuestions+=1
+            await asyncio.sleep(0.5)
 
         # must go back to main page before scraping next category/test
         self.goToQuestionBankSite()
 
 
-    def _getQuestionData(self, questionResponse: dict):
+    async def _getQuestionData(self, questionResponse: dict):
         """
         Gets the data for a single question and inserts it into the database.
 
@@ -130,12 +143,7 @@ class Main:
             None
         """
         if 'external_id' not in questionResponse or questionResponse['external_id'] is None:
-            self._getQuestionDataMath(questionResponse)
-            return
-        
-        if self.database.isDuplicate(questionResponse['external_id']):
-            if debug:
-                print(f"{questionResponse['external_id']} is already in table")
+            await self._getQuestionDataMath(questionResponse)
             return
 
         script = f"""
@@ -152,6 +160,7 @@ class Main:
         question = Question(
             questionResponse['external_id'],
             questionResponse['questionId'],
+            self.testToString(self.currentTest),
             self.currentCategory,
             questionResponse['primary_class_cd_desc'],
             questionResponse['skill_desc'],
@@ -163,21 +172,18 @@ class Main:
             response['rationale']
         )
 
-        self.questions.append(question)
-        self.database.insert(question)
+        if debug:
+            print(f"Got {question.id} from {self.currentTest} {self.currentCategory}")
 
-        with open('questions.txt', 'a') as f:
-            json.dump(response, f)
-            f.write(',\n')
+        await databaseInsert(question)
+
+        # with open('questions.txt', 'a') as f:
+        #     json.dump(response, f)
+        #     f.write(',\n')
 
         del self.driver.requests
 
-    def _getQuestionDataMath(self, questionResponse: dict):
-        if self.database.isDuplicate(questionResponse['ibn']):
-            if debug:
-                print(f"{questionResponse['ibn']} is already ")
-            return
-
+    async def _getQuestionDataMath(self, questionResponse: dict):
         script = f"""
             let xhr = new XMLHttpRequest();
             xhr.open('GET', 'https://saic.collegeboard.org/disclosed/{questionResponse['ibn']}.json', false);
@@ -188,14 +194,15 @@ class Main:
         self.driver.execute_script(script)
 
         request = self.driver.wait_for_request(f"{questionResponse['ibn']}.json")
-        data = gzip.decompress(request.response.body)
+        data = request.response.body
+        if request.response.headers['Content-Encoding'] == 'gzip':
+            data = gzip.decompress(request.response.body)
         response = json.loads(data.decode('utf-8'))[0]
 
         answer = ""
         answer_choices = ""
-        print(response)
         if response['answer']['style'] == "Multiple Choice":
-            answer = response['answer']['correct_choice']
+            answer = response['answer']['correct_choice'] if 'correct_choice' in response['answer'] else re.search(r"Choice (.) is correct\.", response['answer']['rationale'])[0]
             answer_choices = response['answer']['choices']
         else:
             ans = re.search(r"([1-9]*)\.", response['answer']['rationale'])
@@ -205,23 +212,23 @@ class Main:
         question = Question(
             questionResponse['ibn'],
             questionResponse['questionId'],
+            self.testToString(self.currentTest),
             self.currentCategory,
             questionResponse['primary_class_cd_desc'],
             questionResponse['skill_desc'],
             Main.convertDifficulty(questionResponse['difficulty']),
             response['body'] if 'body' in response else "",
-            response['prompt'],
+            response['prompt'] if 'prompt' in response else "",
             answer_choices,
             answer,
             response['answer']['rationale']
         )
 
-        self.questions.append(question)
-        self.database.insert(question)
+        await databaseInsert(question)
 
-        with open('questions.txt', 'a') as f:
-            json.dump(response, f)
-            f.write(',\n')
+        # with open('questions.txt', 'a') as f:
+        #     json.dump(response, f)
+        #     f.write(',\n')
 
         del self.driver.requests
 
@@ -233,11 +240,20 @@ class Main:
         elif difficulty == "E":
             return "Easy"
 
+    def testToString(self, test: str):
+        if test == "99":
+            return "SAT"
+        elif test == "100":
+            return "PSAT11_10"
+        elif test == "102":
+            return "PSAT8_9"
+
 
 class Question:
     def __init__(self,
         external_id: str,
         question_id: str,
+        test: str,
         category: str,
         domain: str,
         skill: str,
@@ -254,6 +270,7 @@ class Question:
         Args:
             external_id (str): The external id of the question.
             id (str): The id of the question.
+            test (str): The test the question belongs to.
             category (str): The category of the question.
             domain (str): The domain of the question.
             skill (str): The skill of the question.
@@ -266,6 +283,7 @@ class Question:
         """
         self.id = external_id
         self.question_id = question_id
+        self.test = test
         self.category = category
         self.domain = domain
         self.skill = skill
@@ -276,77 +294,92 @@ class Question:
         self.answer = answer
         self.rationale = rationale
 
-class Database:
-    def __init__(self):
-        """
-        Initializes a new Database object.
 
-        This will create a new SQLite database file if it doesn't exist, and
-        connect to it. The database will have a single table, `sat_questions`,
-        with the following columns:
-        - `id`: A unique identifier for the question.
-        - `category`: The category of the question (reading, writing, math).
-        - `domain`: The domain of the question.
-        - `skill`: The skill of the question.
-        - `difficulty`: The difficulty of the question.
-        - `details`: The extra details given with the question.
-        - `question`: The text of the question.
-        - `answer_choices`: The answer choices.
-        - `answer`: The correct answer.
-        - `rationale`: The explanation for the answer.
-        """
-        self.connection = sqlite3.connect('questions.db')
-        self.cursor = self.connection.cursor()
+async def connectToDatabase():
+    """
+    Initializes the database connection and creates the table if it doesn't exist.
 
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sat_questions (
-                id TEXT PRIMARY KEY NOT NULL UNIQUE,
-                questionId TEXT NOT NULL UNIQUE,
-                category TEXT NOT NULL,
-                domain TEXT NOT NULL,
-                skill TEXT NOT NULL,
-                difficulty TEXT NOT NULL,
-                details TEXT,
-                question TEXT NOT NULL,
-                answer_choices TEXT,
-                answer TEXT NOT NULL,
-                rationale TEXT NOT NULL
-            );
-        """)
+    This creates a connection to the SQLite database file `questions.db` and
+    creates a table `sat_questions` if it doesn't exist. The table has the
+    following columns:
+    - `id`: A unique identifier for the question.
+    - `category`: The category of the question (reading, writing, math).
+    - `domain`: The domain of the question.
+    - `skill`: The skill of the question.
+    - `difficulty`: The difficulty of the question.
+    - `details`: The extra details given with the question.
+    - `question`: The text of the question.
+    - `answer_choices`: The answer choices.
+    - `answer`: The correct answer.
+    - `rationale`: The explanation for the answer.
 
-    def insert(self, question: Question):
-        """
-        Inserts a single question into the database.
+    A unique index is created on the `id` column to ensure that each question
+    has a unique identifier.
+    """
+    global connection, cursor
+    connection = await asqlite.connect('questions.db')
+    cursor = await connection.cursor()
 
-        Args:
-            question (Question): The question to insert.
-        """
-        try:
-            self.cursor.execute("""
-                INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-            """, (
-                question.id,
-                question.question_id,
-                question.category,
-                question.domain,
-                question.skill,
-                question.difficulty,
-                question.details,
-                question.question,
-                json.dumps(question.answer_choices),
-                question.answer,
-                question.rationale
-            ))
-            self.connection.commit()
-        except sqlite3.IntegrityError:
-            print(f"{question.id} already in table.")
-    
-    def isDuplicate(self, id: str):
-        print(id)
-        res = self.cursor.execute("""
-            SELECT COUNT(*) FROM sat_questions WHERE id = ?;
-        """, (id))
-        return len(res.fetchone()) > 1
+    await cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS sat_questions (
+            id TEXT PRIMARY KEY NOT NULL UNIQUE,
+            questionId TEXT NOT NULL UNIQUE,
+            test TEXT NOT NULL,
+            category TEXT NOT NULL,
+            domain TEXT NOT NULL,
+            skill TEXT NOT NULL,
+            difficulty TEXT NOT NULL,
+            details TEXT,
+            question TEXT NOT NULL,
+            answer_choices TEXT,
+            answer TEXT NOT NULL,
+            rationale TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS dupeCheckIndex ON sat_questions (id, test);
+    """)
+
+async def databaseInsert(question: Question):
+    """
+    Inserts a single question into the database.
+
+    Args:
+        question (Question): The question to insert.
+    """
+    try:
+        await cursor.execute("""
+            INSERT INTO sat_questions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (
+            question.id,
+            question.question_id,
+            question.test,
+            question.category,
+            question.domain,
+            question.skill,
+            question.difficulty,
+            question.details,
+            question.question,
+            json.dumps(question.answer_choices),
+            question.answer,
+            question.rationale
+        ))
+        await connection.commit()
+    except Exception as e:
+        print(e)
+
+async def databaseIsDuplicate(id: str, test: str):
+    res = await cursor.execute("""
+        SELECT COUNT(*) FROM sat_questions WHERE id = ? AND test = ?;
+    """, (id, test))
+
+    count = await res.fetchone()
+    return count[0] > 0
+
+async def main():
+    runner = Main()
+    runner.goToQuestionBankSite()
+    for test in (SAT, PSAT11_10, PSAT8_9):
+        await runner.getQuestionsForTest(test)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -359,10 +392,8 @@ if __name__ == "__main__":
                 print("Usage: python script.py [--debug | -d] [--headless | -H]")
                 sys.exit(0)
 
-    runner = Main()
-    elem = runner.goToQuestionBankSite()
-
-    for test in (SAT, PSAT11_10, PSAT8_9):
-        runner.getQuestionsForTest(test)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(connectToDatabase())
+    loop.run_until_complete(main())
 
     print("Done!")

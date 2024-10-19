@@ -3,3 +3,4 @@ selenium-wire>=5.1.0
 packaging
 blinker==1.7.0
 setuptools
+asqlite==2.0.0

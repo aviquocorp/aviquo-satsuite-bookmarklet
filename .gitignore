@@ -136,5 +136,7 @@ dist
 *.json
 *.jsonc
 *.db
+*.db-shm
+*.db-wal
 
 venv
